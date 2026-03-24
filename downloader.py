@@ -167,17 +167,8 @@ if "youtu" in u:
         "/best"
     )
 
-    opts["extractor_args"] = {
-        "instagram": {
-            "api_version": "v1",
-        }
-    }
-
-    opts["merge_output_format"] = "mp4"
-
     if Path(INSTAGRAM_COOKIES).exists():
         opts["cookiefile"] = INSTAGRAM_COOKIES
-
     # ── Facebook ──────────────────────────────
     elif "facebook.com" in u or "fb.com" in u or "fb.watch" in u:
         opts["format"] = "best[ext=mp4]/best"
