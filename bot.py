@@ -3,7 +3,6 @@ from pathlib import Path
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember,
-    InputMediaAudio,
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -43,12 +42,16 @@ def sub_keyboard() -> InlineKeyboardMarkup:
     ])
 
 def fmt_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎬 Video",  callback_data="fmt_video"),
-            InlineKeyboardButton("🎵 Audio",  callback_data="fmt_audio"),
-        ]
-    ])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🎬 Video",  callback_data="fmt_video"),
+        InlineKeyboardButton("🎵 Audio",  callback_data="fmt_audio"),
+    ]])
+
+def audio_from_video_keyboard(url: str) -> InlineKeyboardMarkup:
+    """Video yuborilgandan keyin audio yuklab olish tugmasi."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🎵 Musiqasini yuklab olish", callback_data=f"dl_audio|{url}"),
+    ]])
 
 def duration_str(sec: int) -> str:
     if not sec: return "—"
@@ -84,17 +87,18 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def send_welcome(update, name: str):
     await update.effective_message.reply_text(
-        f"🔥 Assalomu alaykum, <b>{name}</b>. "
-        f"<b>{CHANNEL_NAME}</b>ga Xush kelibsiz.\n\n"
+        f"🔥 Assalomu alaykum, <b>{name}</b>!\n"
+        f"<b>{CHANNEL_NAME}</b>ga Xush kelibsiz 🎉\n\n"
         f"Bot orqali quyidagilarni yuklab olishingiz mumkin:\n\n"
-        f"• <b>Instagram</b> — post va Stories + audio bilan\n"
-        f"• <b>TikTok</b> — suv belgisiz video\n"
-        f"• <b>YouTube</b> — video + audio bilan birga\n"
-        f"• <b>Facebook</b> va <b>Threads</b> — video\n"
-        f"• 🎵 <b>Qo'shiq nomi</b> yoki <b>ijrochi ismi</b>\n"
-        f"• 📝 <b>Qo'shiq matni</b> — /lyrics buyrug'i bilan\n"
-        f"• 🎤 <b>Ovozli xabar</b>, <b>Video</b>, <b>Audio</b>, <b>Video xabar</b>\n\n"
-        f"🚀 Media yuklashni boshlash uchun uning havolasini yuboring.",
+        f"🎬 <b>Instagram</b> — post, Reels, Stories\n"
+        f"🎵 <b>TikTok</b> — suv belgisiz video\n"
+        f"▶️ <b>YouTube</b> — video yoki audio\n"
+        f"📘 <b>Facebook</b> — video\n"
+        f"🧵 <b>Threads</b> — video\n\n"
+        f"🎵 <b>Qo'shiq qidirish:</b> nom yoki ijrochi ismini yozing\n"
+        f"🎤 <b>Ovozli xabar:</b> qo'shiq nomini aytib yuboring\n"
+        f"📝 <b>Qo'shiq matni:</b> /lyrics buyrug'i\n\n"
+        f"🚀 Boshlash uchun havola yoki qo'shiq nomini yuboring!",
         parse_mode="HTML",
     )
 
@@ -120,7 +124,7 @@ async def cb_check_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 # ══════════════════════════════════════════════
-#  FORMAT TANLASH CALLBACK
+#  FORMAT TANLASH CALLBACK (YouTube)
 # ══════════════════════════════════════════════
 
 async def cb_format(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -128,12 +132,10 @@ async def cb_format(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     if not await is_subscribed(q.from_user.id, ctx):
-        await q.edit_message_text(
-            "⛔ Obuna kerak!", reply_markup=sub_keyboard()
-        )
+        await q.edit_message_text("⛔ Obuna kerak!", reply_markup=sub_keyboard())
         return
 
-    fmt = q.data          # "fmt_video" yoki "fmt_audio"
+    fmt = q.data   # "fmt_video" yoki "fmt_audio"
     url = ctx.user_data.get("pending_url")
     if not url:
         await q.edit_message_text("⚠️ Havola topilmadi. Qaytadan yuboring.")
@@ -143,6 +145,69 @@ async def cb_format(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'🎬 Video' if fmt == 'fmt_video' else '🎵 Audio'} yuklanmoqda…\nBiroz kuting ⏳"
     )
     await _process(q.message, ctx, url, fmt == "fmt_video", q.from_user.id)
+
+# ══════════════════════════════════════════════
+#  VIDEO DAN AUDIO YUKLAB OLISH CALLBACK
+# ══════════════════════════════════════════════
+
+async def cb_download_audio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Video xabari ostidagi '🎵 Musiqasini yuklab olish' tugmasi."""
+    q = update.callback_query
+    await q.answer("🎵 Audio yuklanmoqda…")
+
+    if not await is_subscribed(q.from_user.id, ctx):
+        await q.message.reply_text("⛔ Obuna kerak!", reply_markup=sub_keyboard())
+        return
+
+    # callback_data = "dl_audio|https://..."
+    url = q.data.split("|", 1)[1] if "|" in q.data else ""
+    if not url:
+        await q.message.reply_text("⚠️ URL topilmadi.")
+        return
+
+    msg = await q.message.reply_text("🎵 Audio yuklanmoqda… ⏳")
+    await ctx.bot.send_chat_action(q.message.chat_id, ChatAction.UPLOAD_DOCUMENT)
+
+    try:
+        info = await download_audio(url, q.from_user.id)
+        path = Path(info["path"])
+
+        if not path.exists():
+            await msg.edit_text("❌ Audio fayl topilmadi.")
+            return
+
+        size_mb = path.stat().st_size / (1024 * 1024)
+        if size_mb > MAX_SIZE_MB:
+            await msg.edit_text(f"⚠️ Fayl hajmi katta ({size_mb:.1f} MB). Telegram {MAX_SIZE_MB} MB dan ortiqni qabul qilmaydi.")
+            cleanup(str(path))
+            return
+
+        title  = info.get("title", "")[:60]
+        artist = info.get("artist", "")
+        dur    = duration_str(info.get("duration", 0))
+        bot_name = (await ctx.bot.get_me()).username
+
+        caption = (
+            f"🎵 <b>{title}</b>\n"
+            f"👤 {artist}  •  ⏱ {dur}\n"
+            f"🤖 @{bot_name}"
+        )
+        await msg.edit_text(f"📤 Yuborilmoqda… ({size_mb:.1f} MB)")
+        with open(path, "rb") as f:
+            await ctx.bot.send_audio(
+                q.message.chat_id, f,
+                caption=caption, parse_mode="HTML",
+                title=title, performer=artist,
+                duration=info.get("duration", 0),
+            )
+        await msg.delete()
+
+    except Exception as e:
+        log.error(f"cb_download_audio xato: {e}", exc_info=True)
+        await msg.edit_text(f"❌ Audio yuklab bo'lmadi:\n<code>{str(e)[:150]}</code>", parse_mode="HTML")
+    finally:
+        if "info" in locals():
+            cleanup(info.get("path", ""))
 
 # ══════════════════════════════════════════════
 #  URL HANDLER
@@ -163,7 +228,7 @@ async def handle_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # YouTube uchun format tanlash, qolganlar uchun to'g'ridan video
+    # YouTube uchun format tanlash
     if "youtu" in url.lower():
         ctx.user_data["pending_url"] = url
         await update.message.reply_text(
@@ -186,7 +251,9 @@ async def _process(msg, ctx, url: str, video: bool, uid: int):
     chat_id = msg.chat_id
 
     try:
-        await ctx.bot.send_chat_action(chat_id, ChatAction.UPLOAD_VIDEO if video else ChatAction.UPLOAD_DOCUMENT)
+        await ctx.bot.send_chat_action(
+            chat_id, ChatAction.UPLOAD_VIDEO if video else ChatAction.UPLOAD_DOCUMENT
+        )
 
         if video:
             info = await download_video(url, uid)
@@ -208,50 +275,59 @@ async def _process(msg, ctx, url: str, video: bool, uid: int):
             cleanup(str(path))
             return
 
-        title    = info.get("title","")[:60]
+        title    = info.get("title", "")[:60]
         dur      = duration_str(info.get("duration", 0))
         platform = platform_name(url)
+        bot_name = (await ctx.bot.get_me()).username
 
         caption = (
             f"{'🎬' if video else '🎵'} <b>{title}</b>\n"
             f"📌 {platform}  •  ⏱ {dur}\n"
-            f"🤖 @{(await ctx.bot.get_me()).username}"
+            f"🤖 @{bot_name}"
         )
 
         await msg.edit_text(f"📤 Yuborilmoqda… ({size_mb:.1f} MB)")
 
         with open(path, "rb") as f:
             if video:
+                # Video pastida audio yuklab olish tugmasi
+                reply_markup = audio_from_video_keyboard(url)
                 await ctx.bot.send_video(
                     chat_id, f,
                     caption=caption, parse_mode="HTML",
                     supports_streaming=True,
+                    reply_markup=reply_markup,
                 )
             else:
-                artist = info.get("artist","")
+                artist = info.get("artist", "")
                 await ctx.bot.send_audio(
                     chat_id, f,
                     caption=caption, parse_mode="HTML",
                     title=title, performer=artist,
-                    duration=info.get("duration",0),
+                    duration=info.get("duration", 0),
                 )
+
         await msg.delete()
 
     except yt_dlp.utils.DownloadError as e:
         err = str(e)
         if "private" in err.lower() or "login" in err.lower():
             text = "🔒 Bu xususiy (private) kontent. Yuklab bo'lmaydi."
-        elif "not available" in err.lower():
+        elif "not available" in err.lower() or "unavailable" in err.lower():
             text = "❌ Kontent mavjud emas yoki o'chirilgan."
+        elif "format" in err.lower():
+            text = "❌ Ushbu video formati mavjud emas. Boshqa havola yuboring."
         else:
             text = f"❌ Yuklab bo'lmadi:\n<code>{err[:200]}</code>"
         await msg.edit_text(text, parse_mode="HTML")
+
     except Exception as e:
         log.error(f"_process xato: {e}", exc_info=True)
         await msg.edit_text(f"❌ Xato: <code>{str(e)[:150]}</code>", parse_mode="HTML")
+
     finally:
-        if "path" in locals():
-            cleanup(info.get("path",""))
+        if "info" in locals():
+            cleanup(info.get("path", ""))
 
 # ══════════════════════════════════════════════
 #  QO'SHIQ QIDIRISH — matn yuborganda
@@ -260,28 +336,29 @@ async def _process(msg, ctx, url: str, video: bool, uid: int):
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
-    # URL bo'lsa url handleri o'zi olib ketadi
     if is_url(text):
         return
 
     if not await gate(update, ctx):
         return
 
-    # /lyrics triggeri matnda: "lyrics: Sarvinoz"
     lower = text.lower()
     if lower.startswith("lyrics:") or lower.startswith("matn:"):
         query = text.split(":", 1)[1].strip()
         await _send_lyrics(update, ctx, query)
         return
 
-    # Qo'shiq qidirish
-    msg = await update.message.reply_text(
-        f"🔍 <b>{text}</b> qidirilmoqda…", parse_mode="HTML"
+    await _search_and_send_song(update, ctx, text)
+
+async def _search_and_send_song(update, ctx, query: str):
+    """Qo'shiq qidiradi va yuboradi."""
+    msg = await update.effective_message.reply_text(
+        f"🔍 <b>{query}</b> qidirilmoqda…", parse_mode="HTML"
     )
     await ctx.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_DOCUMENT)
 
     try:
-        info = await search_song(text, update.effective_user.id)
+        info = await search_song(query, update.effective_user.id)
         path = Path(info["path"])
 
         if not path.exists():
@@ -289,8 +366,8 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
         size_mb = path.stat().st_size / (1024 * 1024)
-        title  = info.get("title","")[:60]
-        artist = info.get("artist","")
+        title  = info.get("title", "")[:60]
+        artist = info.get("artist", "")
         dur    = duration_str(info.get("duration", 0))
         bot_name = (await ctx.bot.get_me()).username
 
@@ -313,13 +390,43 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"Song search xato: {e}", exc_info=True)
         await msg.edit_text(
-            f"❌ Qo'shiq topilmadi yoki yuklab bo'lmadi.\n\n"
-            f"<i>Maslahat: To'liqroq nom kiriting, masalan: «Sarvinoz Muhabbat»</i>",
+            f"❌ <b>«{query}»</b> topilmadi yoki yuklab bo'lmadi.\n\n"
+            f"<i>💡 Maslahat: To'liqroq yozing, masalan:\n"
+            f"«Xurshid Raximov Ayriliq» yoki «Dua Lipa Levitating»</i>",
             parse_mode="HTML",
         )
     finally:
         if "info" in locals():
-            cleanup(info.get("path",""))
+            cleanup(info.get("path", ""))
+
+# ══════════════════════════════════════════════
+#  OVOZLI XABAR — qo'shiq qidirish
+# ══════════════════════════════════════════════
+
+async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchi ovozli xabar yuborsa — qo'shiq deb qidiradi."""
+    if not await gate(update, ctx):
+        return
+
+    msg = update.message
+    voice = msg.voice
+
+    # Ovozli xabarni text sifatida qidirish uchun caption tekshirish
+    # (Telegram voice-to-text API yo'q, shuning uchun caption'dan olamiz)
+    query = msg.caption if msg.caption else None
+
+    if not query:
+        await msg.reply_text(
+            "🎤 Ovozli xabar qabul qilindi!\n\n"
+            "❓ Qaysi qo'shiqni qidirmoqchisiz?\n"
+            "<i>Qo'shiq nomini yozing yoki ovozli xabarga caption qo'shing.</i>",
+            parse_mode="HTML",
+        )
+        # Keyingi xabarni kutish uchun state saqlash
+        ctx.user_data["waiting_for_song_query"] = True
+        return
+
+    await _search_and_send_song(update, ctx, query)
 
 # ══════════════════════════════════════════════
 #  LYRICS COMMAND
@@ -332,7 +439,7 @@ async def cmd_lyrics(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not query:
         await update.message.reply_text(
             "📝 Ishlatish: <code>/lyrics ijrochi - qo'shiq nomi</code>\n\n"
-            "Misol: <code>/lyrics Shahzoda - Sevinch</code>",
+            "Misol: <code>/lyrics Dua Lipa - Levitating</code>",
             parse_mode="HTML",
         )
         return
@@ -345,7 +452,6 @@ async def _send_lyrics(update: Update, ctx: ContextTypes.DEFAULT_TYPE, query: st
     )
     lyrics = await fetch_lyrics(query)
     if lyrics:
-        # Telegramda 4096 belgi limit
         chunks = [lyrics[i:i+4000] for i in range(0, len(lyrics), 4000)]
         await msg.edit_text(
             f"📝 <b>{query}</b>\n\n{chunks[0]}",
@@ -356,27 +462,23 @@ async def _send_lyrics(update: Update, ctx: ContextTypes.DEFAULT_TYPE, query: st
     else:
         await msg.edit_text(
             f"❌ <b>{query}</b> uchun matn topilmadi.\n\n"
-            f"<i>Format: ijrochi ismi - qo'shiq nomi</i>",
+            f"<i>Format: «ijrochi ismi - qo'shiq nomi»\n"
+            f"Misol: /lyrics Shahzoda - Sevinch</i>",
             parse_mode="HTML",
         )
 
 # ══════════════════════════════════════════════
-#  MEDIA XABARLAR — voice, audio, video, video_note
+#  MEDIA XABARLAR — audio, video, video_note, document
 # ══════════════════════════════════════════════
 
 async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Foydalanuvchi media yuborsa — qayta yuboradi (forward o'rniga)."""
+    """Foydalanuvchi media yuborsa — qayta yuboradi."""
     if not await gate(update, ctx):
         return
     msg = update.message
     bot_name = (await ctx.bot.get_me()).username
 
-    if msg.voice:
-        await ctx.bot.send_voice(
-            msg.chat_id, msg.voice.file_id,
-            caption=f"🎤 Ovozli xabar\n🤖 @{bot_name}",
-        )
-    elif msg.video_note:
+    if msg.video_note:
         await ctx.bot.send_video_note(msg.chat_id, msg.video_note.file_id)
     elif msg.video:
         await ctx.bot.send_video(
@@ -404,10 +506,13 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 <b>Qo'llanma</b>\n\n"
         "<b>🔗 Havola yuborish:</b>\n"
-        "YouTube, Instagram, TikTok, Facebook, Threads havolasini yuboring\n\n"
+        "YouTube, Instagram, TikTok, Facebook, Threads havolasini yuboring\n"
+        "↳ Video yuborilgandan keyin <b>«🎵 Musiqasini yuklab olish»</b> tugmasi chiqadi\n\n"
         "<b>🎵 Qo'shiq qidirish:</b>\n"
         "Qo'shiq nomini yoki ijrochi ismini yozing\n"
         "<i>Misol: Xurshid Raximov Ayriliq</i>\n\n"
+        "<b>🎤 Ovozli xabar:</b>\n"
+        "Caption qo'shib ovozli xabar yuboring — bot qo'shiq qidiradi\n\n"
         "<b>📝 Qo'shiq matni:</b>\n"
         "<code>/lyrics ijrochi - qo'shiq</code>\n"
         "<i>Misol: /lyrics Dua Lipa - Levitating</i>\n\n"
@@ -433,8 +538,9 @@ def main():
     app.add_handler(CommandHandler("lyrics", cmd_lyrics))
 
     # Callbacklar
-    app.add_handler(CallbackQueryHandler(cb_check_sub, pattern="^check_sub$"))
-    app.add_handler(CallbackQueryHandler(cb_format,    pattern="^fmt_"))
+    app.add_handler(CallbackQueryHandler(cb_check_sub,      pattern="^check_sub$"))
+    app.add_handler(CallbackQueryHandler(cb_format,         pattern="^fmt_"))
+    app.add_handler(CallbackQueryHandler(cb_download_audio, pattern="^dl_audio\\|"))
 
     # URL xabarlar
     app.add_handler(MessageHandler(
@@ -442,10 +548,12 @@ def main():
         handle_url,
     ))
 
-    # Media xabarlar
+    # Ovozli xabarlar
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+    # Media xabarlar (voice emas)
     app.add_handler(MessageHandler(
-        filters.VOICE | filters.VIDEO | filters.AUDIO |
-        filters.VIDEO_NOTE | filters.Document.ALL,
+        filters.VIDEO | filters.AUDIO | filters.VIDEO_NOTE | filters.Document.ALL,
         handle_media,
     ))
 
