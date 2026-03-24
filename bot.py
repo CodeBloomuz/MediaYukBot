@@ -12,7 +12,7 @@ import yt_dlp
 from config import BOT_TOKEN, CHANNEL_ID, CHANNEL_LINK, CHANNEL_NAME, MAX_SIZE_MB
 from downloader import (
     is_url, extract_url, is_supported, platform_name,
-    download_video, cleanup,
+    download_media, cleanup, cleanup_list,
 )
 
 logging.basicConfig(
@@ -47,7 +47,6 @@ def duration_str(sec: int) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 async def gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
-    """True = foydalanuvchi obuna bo'lgan."""
     if await is_subscribed(update.effective_user.id, ctx):
         return True
     await update.effective_message.reply_text(
@@ -76,8 +75,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🔥 Assalomu alaykum, <b>{user.first_name}</b>!\n"
         f"<b>{CHANNEL_NAME}</b>ga Xush kelibsiz 🎉\n\n"
         f"Bot orqali quyidagilarni yuklab olishingiz mumkin:\n\n"
-        f"▶️ <b>YouTube</b> — video\n"
-        f"🎬 <b>Instagram</b> — post, Reels, Stories\n"
+        f"▶️ <b>YouTube</b> — video (har qanday format)\n"
+        f"🎬 <b>Instagram</b> — post (rasm/video), Reels, Stories\n"
         f"📘 <b>Facebook</b> — video, Stories\n"
         f"🎵 <b>TikTok</b> — suv belgisiz video\n\n"
         f"🚀 Boshlash uchun havola yuboring!",
@@ -141,10 +140,78 @@ async def _process(msg, ctx, url: str, uid: int):
     chat_id = msg.chat_id
 
     try:
-        await ctx.bot.send_chat_action(chat_id, ChatAction.UPLOAD_VIDEO)
+        await ctx.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
 
-        info = await download_video(url, uid)
+        info = await download_media(url, uid)
+        media_type = info.get("type", "video")
 
+        bot_name = (await ctx.bot.get_me()).username
+        platform = platform_name(url)
+
+        # ── RASM yoki CAROUSEL ────────────────────────────────────────────────
+        if media_type == "photos":
+            paths = info.get("paths", [])
+            media_types = info.get("media_types", ["photo"] * len(paths))
+            title = info.get("title", "")[:60]
+            uploader = info.get("uploader", "")
+
+            if not paths:
+                await msg.edit_text("❌ Rasmlar topilmadi.")
+                return
+
+            await msg.edit_text(f"📤 {len(paths)} ta media yuborilmoqda…")
+            await ctx.bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO)
+
+            caption = (
+                f"🖼 <b>{title}</b>\n"
+                f"📌 {platform}"
+                + (f" • 👤 {uploader}" if uploader else "")
+                + f"\n🤖 @{bot_name}"
+            )
+
+            # Telegram media group (max 10 ta)
+            from telegram import InputMediaPhoto, InputMediaVideo
+
+            media_group = []
+            for i, (path, mtype) in enumerate(zip(paths, media_types)):
+                p = Path(path)
+                if not p.exists():
+                    continue
+
+                size_mb = p.stat().st_size / (1024 * 1024)
+                if size_mb > MAX_SIZE_MB:
+                    log.warning(f"Fayl {size_mb:.1f}MB — o'tkazib yuborildi")
+                    continue
+
+                with open(p, "rb") as f:
+                    file_data = f.read()
+
+                cap = caption if i == 0 else None
+
+                if mtype == "video":
+                    media_group.append(
+                        InputMediaVideo(file_data, caption=cap, parse_mode="HTML")
+                    )
+                else:
+                    media_group.append(
+                        InputMediaPhoto(file_data, caption=cap, parse_mode="HTML")
+                    )
+
+            if not media_group:
+                await msg.edit_text("❌ Yuborish uchun fayl topilmadi.")
+                cleanup_list(paths)
+                return
+
+            # Telegram 1 vaqtda max 10 ta media qabul qiladi
+            for i in range(0, len(media_group), 10):
+                chunk = media_group[i:i+10]
+                await ctx.bot.send_media_group(chat_id, chunk)
+
+            await msg.delete()
+            cleanup_list(paths)
+            return
+
+        # ── VIDEO ─────────────────────────────────────────────────────────────
         path = Path(info["path"])
         if not path.exists():
             await msg.edit_text("❌ Fayl topilmadi. Qaytadan urinib ko'ring.")
@@ -163,9 +230,7 @@ async def _process(msg, ctx, url: str, uid: int):
 
         title = info.get("title", "")[:60]
         dur = duration_str(info.get("duration", 0))
-        platform = platform_name(url)
         uploader = info.get("uploader", "")
-        bot_name = (await ctx.bot.get_me()).username
 
         caption = (
             f"🎬 <b>{title}</b>\n"
@@ -176,6 +241,7 @@ async def _process(msg, ctx, url: str, uid: int):
         )
 
         await msg.edit_text(f"📤 Yuborilmoqda… ({size_mb:.1f} MB)")
+        await ctx.bot.send_chat_action(chat_id, ChatAction.UPLOAD_VIDEO)
 
         with open(path, "rb") as f:
             await ctx.bot.send_video(
@@ -193,8 +259,12 @@ async def _process(msg, ctx, url: str, uid: int):
             text = "🔒 Bu xususiy (private) kontent. Yuklab bo'lmaydi.\n\n<i>Faqat ochiq profillar ishlaydi.</i>"
         elif "not available" in err.lower() or "unavailable" in err.lower():
             text = "❌ Kontent mavjud emas yoki o'chirilgan."
+        elif "sign in" in err.lower() or "confirm your age" in err.lower():
+            text = "🔞 Bu kontent yoshga oid cheklangan. Yuklab bo'lmaydi."
         elif "format" in err.lower():
             text = "❌ Ushbu video formati mavjud emas."
+        elif "blocked" in err.lower() or "copyright" in err.lower():
+            text = "🚫 Bu video mualliflik huquqi sababli bloklanган."
         else:
             text = f"❌ Yuklab bo'lmadi:\n<code>{err[:200]}</code>"
         await msg.edit_text(text, parse_mode="HTML")
@@ -208,7 +278,11 @@ async def _process(msg, ctx, url: str, uid: int):
 
     finally:
         if "info" in locals():
-            cleanup(info.get("path", ""))
+            t = info.get("type", "video")
+            if t == "photos":
+                cleanup_list(info.get("paths", []))
+            else:
+                cleanup(info.get("path", ""))
 
 # ══════════════════════════════════════════════
 # /help
@@ -222,9 +296,11 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📖 <b>Qo'llanma</b>\n\n"
         "<b>Qo'llab-quvvatlanadigan platformalar:</b>\n\n"
         "▶️ <b>YouTube</b>\n"
-        "└ Har qanday YouTube video havolasi\n\n"
+        "└ Har qanday YouTube video havolasi\n"
+        "└ Barcha formatlar (1080p gacha)\n\n"
         "🎬 <b>Instagram</b>\n"
-        "└ Post, Reels, Stories (faqat ochiq profil)\n\n"
+        "└ Post (rasm va carousel)\n"
+        "└ Reels va Stories (faqat ochiq profil)\n\n"
         "📘 <b>Facebook</b>\n"
         "└ Video va Stories (faqat ochiq)\n\n"
         "🎵 <b>TikTok</b>\n"
@@ -240,20 +316,15 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Commandlar
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-
-    # Obuna callback
     app.add_handler(CallbackQueryHandler(cb_check_sub, pattern="^check_sub$"))
 
-    # URL xabarlar
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex(r'https?://'),
         handle_url,
     ))
 
-    # Boshqa matnlar — faqat havola yuboring deb aytish
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         lambda u, c: u.message.reply_text(
