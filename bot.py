@@ -75,10 +75,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🔥 Assalomu alaykum, <b>{user.first_name}</b>!\n"
         f"<b>{CHANNEL_NAME}</b>ga Xush kelibsiz 🎉\n\n"
         f"Bot orqali quyidagilarni yuklab olishingiz mumkin:\n\n"
-        f"▶️ <b>YouTube</b> — video (har qanday format)\n"
-        f"🎬 <b>Instagram</b> — post (rasm/video), Reels, Stories\n"
-        f"📘 <b>Facebook</b> — video, Stories\n"
-        f"🎵 <b>TikTok</b> — suv belgisiz video\n\n"
+        f"🎬 <b>Instagram</b> — Reels, Stories\n"
+        f"📘 <b>Facebook</b> — Video,
         f"🚀 Boshlash uchun havola yuboring!",
         parse_mode="HTML",
     )
