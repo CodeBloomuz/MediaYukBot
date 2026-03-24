@@ -7,12 +7,15 @@ from config import DOWNLOAD_DIR, AUDIO_QUALITY
 DOWNLOAD_PATH = Path(DOWNLOAD_DIR)
 DOWNLOAD_PATH.mkdir(exist_ok=True)
 
+COOKIES_FILE = "cookies.txt"
+
 SUPPORTED = [
     "youtube.com", "youtu.be",
     "instagram.com",
     "facebook.com", "fb.com", "fb.watch",
     "tiktok.com",
     "threads.net",
+    "x.com", "twitter.com",
 ]
 
 def is_url(text: str) -> bool:
@@ -32,7 +35,14 @@ def platform_name(url: str) -> str:
     if "facebook" in u or "fb." in u: return "Facebook"
     if "tiktok" in u:     return "TikTok"
     if "threads" in u:    return "Threads"
+    if "x.com" in u or "twitter" in u: return "Twitter/X"
     return "Video"
+
+def _cookies_opts() -> dict:
+    """Cookies fayli mavjud bo'lsa qo'shadi."""
+    if Path(COOKIES_FILE).exists():
+        return {"cookiefile": COOKIES_FILE}
+    return {}
 
 def _base_opts(uid: int, ext: str) -> dict:
     opts = {
@@ -41,21 +51,33 @@ def _base_opts(uid: int, ext: str) -> dict:
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": ext,
+        "socket_timeout": 30,
     }
-    if Path("cookies.txt").exists():
-        opts["cookiefile"] = "cookies.txt"
+    opts.update(_cookies_opts())
     return opts
 
 # ─── VIDEO ────────────────────────────────────
 def _download_video_sync(url: str, uid: int) -> dict:
     opts = _base_opts(uid, "mp4")
+
+    # Keng fallback zanjiri — har qanday formatni topadi
     opts["format"] = (
         "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]"
-        "/best[ext=mp4][height<=720]/best[height<=720]/best"
+        "/bestvideo[height<=720]+bestaudio"
+        "/best[height<=720]"
+        "/bestvideo+bestaudio"
+        "/best"
     )
+
     # TikTok watermark-free
     if "tiktok" in url.lower():
-        opts["extractor_args"] = {"tiktok": {"api_hostname": ["api22-normal-c-useast2a.tiktokv.com"]}}
+        opts["extractor_args"] = {
+            "tiktok": {"api_hostname": ["api22-normal-c-useast2a.tiktokv.com"]}
+        }
+
+    # Threads uchun
+    if "threads.net" in url.lower():
+        opts["extractor_args"] = {"instagram": {"include_ads": False}}
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -63,8 +85,14 @@ def _download_video_sync(url: str, uid: int) -> dict:
         p = Path(fname)
         if not p.exists():
             p = p.with_suffix(".mp4")
-        return {"path": str(p), "title": info.get("title","Video"),
-                "duration": info.get("duration", 0), "thumb": info.get("thumbnail")}
+        return {
+            "path": str(p),
+            "title": info.get("title", "Video"),
+            "duration": info.get("duration", 0),
+            "thumb": info.get("thumbnail"),
+            "video_id": info.get("id", ""),
+            "uploader": info.get("uploader", ""),
+        }
 
 async def download_video(url: str, uid: int) -> dict:
     return await asyncio.get_event_loop().run_in_executor(
@@ -83,10 +111,14 @@ def _download_audio_sync(url: str, uid: int) -> dict:
         info = ydl.extract_info(url, download=True)
         fname = ydl.prepare_filename(info)
         p = Path(fname).with_suffix(".mp3")
-        return {"path": str(p), "title": info.get("title","Audio"),
-                "duration": info.get("duration", 0), "thumb": info.get("thumbnail"),
-                "artist": info.get("artist") or info.get("uploader",""),
-                "album": info.get("album","")}
+        return {
+            "path": str(p),
+            "title": info.get("title", "Audio"),
+            "duration": info.get("duration", 0),
+            "thumb": info.get("thumbnail"),
+            "artist": info.get("artist") or info.get("uploader", ""),
+            "album": info.get("album", ""),
+        }
 
 async def download_audio(url: str, uid: int) -> dict:
     return await asyncio.get_event_loop().run_in_executor(
@@ -108,26 +140,47 @@ def _search_song_sync(query: str, uid: int) -> dict:
             info = info["entries"][0]
         fname = ydl.prepare_filename(info)
         p = Path(fname).with_suffix(".mp3")
-        return {"path": str(p), "title": info.get("title","Qo'shiq"),
-                "duration": info.get("duration", 0),
-                "artist": info.get("artist") or info.get("uploader",""),
-                "thumb": info.get("thumbnail")}
+        return {
+            "path": str(p),
+            "title": info.get("title", "Qo'shiq"),
+            "duration": info.get("duration", 0),
+            "artist": info.get("artist") or info.get("uploader", ""),
+            "thumb": info.get("thumbnail"),
+        }
 
 async def search_song(query: str, uid: int) -> dict:
     return await asyncio.get_event_loop().run_in_executor(
         None, _search_song_sync, query, uid)
 
+# ─── OVOZLI XABAR → QIDIRUV ───────────────────
+def _search_song_by_voice_sync(query: str, uid: int) -> dict:
+    """Ovozdan aniqlangan matn bilan qidiradi."""
+    return _search_song_sync(query, uid)
+
+async def search_song_by_voice(query: str, uid: int) -> dict:
+    return await asyncio.get_event_loop().run_in_executor(
+        None, _search_song_by_voice_sync, query, uid)
+
 # ─── LYRICS ───────────────────────────────────
 async def fetch_lyrics(query: str) -> str | None:
     import aiohttp, urllib.parse
-    # lyrics.ovh — bepul, API key shart emas
-    parts = query.strip().split(None, 1)
-    artist = parts[0] if parts else query
-    title  = parts[1] if len(parts) > 1 else parts[0]
-    url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(artist)}/{urllib.parse.quote(title)}"
+
+    # "artist - title" formatini ajratish
+    if " - " in query:
+        parts = query.split(" - ", 1)
+        artist, title = parts[0].strip(), parts[1].strip()
+    else:
+        words = query.strip().split()
+        artist = words[0] if words else query
+        title  = " ".join(words[1:]) if len(words) > 1 else words[0]
+
+    url = (
+        f"https://api.lyrics.ovh/v1/"
+        f"{urllib.parse.quote(artist)}/{urllib.parse.quote(title)}"
+    )
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            async with s.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
                 if r.status == 200:
                     data = await r.json()
                     return data.get("lyrics")
