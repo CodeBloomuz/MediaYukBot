@@ -144,20 +144,23 @@ def _download_video_sync(url: str, uid: int) -> dict:
     u = url.lower()
 
     # ── YouTube ───────────────────────────────
-    # ── YouTube ───────────────────────────────
-if "youtu" in u:
-    opts["format"] = "bestvideo+bestaudio/best"
-
-    # YouTube bot-blokidan o'tish
-    opts["extractor_args"] = {
-        "youtube": {
-            "player_client": ["web", "android"],
+    if "youtu" in u:
+        opts["format"] = (
+            "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]"
+            "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+            "/bestvideo+bestaudio"
+            "/best[ext=mp4]"
+            "/best"
+        )
+        # YouTube bot-blokidan o'tish
+        opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["web", "android"],
+            }
         }
-    }
-
-    # Cookies mavjud bo'lsa ishlatish
-    if Path("cookies_yt.txt").exists():
-        opts["cookiefile"] = "cookies_yt.txt"
+        # Cookies mavjud bo'lsa ishlatish
+        if Path("cookies_yt.txt").exists():
+            opts["cookiefile"] = "cookies_yt.txt"
 
     # ── Instagram ─────────────────────────────
     elif "instagram.com" in u:
@@ -168,6 +171,7 @@ if "youtu" in u:
         )
         if Path(INSTAGRAM_COOKIES).exists():
             opts["cookiefile"] = INSTAGRAM_COOKIES
+
     # ── Facebook ──────────────────────────────
     elif "facebook.com" in u or "fb.com" in u or "fb.watch" in u:
         opts["format"] = "best[ext=mp4]/best"
@@ -175,20 +179,19 @@ if "youtu" in u:
             opts["cookiefile"] = FACEBOOK_COOKIES
 
     # ── TikTok — suv belgisiz ─────────────────
-elif "tiktok.com" in u:
-    opts["format"] = "bestvideo+bestaudio/best"
-    opts["merge_output_format"] = "mp4"
-
-    opts["extractor_args"] = {
-        "tiktok": {
-            "api_hostname": ["api16-normal-c-useast1a.tiktokv.com"],
-            "app_version": ["26.1.3"],
+    elif "tiktok.com" in u:
+        opts["format"] = "best"
+        # Watermark'siz yuklab olish uchun
+        opts["extractor_args"] = {
+            "tiktok": {
+                "api_hostname": ["api16-normal-c-useast1a.tiktokv.com"],
+                "app_version": ["26.1.3"],
+            }
         }
-    }
 
-# ── Boshqa ────────────────────────────────
-else:
-    opts["format"] = "best[ext=mp4]/best"
+    # ── Boshqa ────────────────────────────────
+    else:
+        opts["format"] = "best[ext=mp4]/best"
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
