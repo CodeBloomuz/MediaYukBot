@@ -186,9 +186,9 @@ elif "tiktok.com" in u:
         }
     }
 
-    # ── Boshqa ────────────────────────────────
-    else:
-        opts["format"] = "best[ext=mp4]/best"
+# ── Boshqa ────────────────────────────────
+else:
+    opts["format"] = "best[ext=mp4]/best"
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
