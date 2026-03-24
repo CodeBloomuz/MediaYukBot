@@ -161,11 +161,13 @@ if "youtu" in u:
 
     # ── Instagram ─────────────────────────────
     elif "instagram.com" in u:
-    opts["format"] = "bestvideo+bestaudio/best"
-    opts["merge_output_format"] = "mp4"
-
-    if Path(INSTAGRAM_COOKIES).exists():
-        opts["cookiefile"] = INSTAGRAM_COOKIES
+        opts["format"] = (
+            "bestvideo[ext=mp4]+bestaudio"
+            "/best[ext=mp4]"
+            "/best"
+        )
+        if Path(INSTAGRAM_COOKIES).exists():
+            opts["cookiefile"] = INSTAGRAM_COOKIES
     # ── Facebook ──────────────────────────────
     elif "facebook.com" in u or "fb.com" in u or "fb.watch" in u:
         opts["format"] = "best[ext=mp4]/best"
