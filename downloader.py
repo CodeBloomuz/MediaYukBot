@@ -161,13 +161,22 @@ if "youtu" in u:
 
     # ── Instagram ─────────────────────────────
     elif "instagram.com" in u:
-        opts["format"] = (
-            "bestvideo[ext=mp4]+bestaudio"
-            "/best[ext=mp4]"
-            "/best"
-        )
-        if Path(INSTAGRAM_COOKIES).exists():
-            opts["cookiefile"] = INSTAGRAM_COOKIES
+    opts["format"] = (
+        "bestvideo[ext=mp4]+bestaudio"
+        "/best[ext=mp4]"
+        "/best"
+    )
+
+    opts["extractor_args"] = {
+        "instagram": {
+            "api_version": "v1",
+        }
+    }
+
+    opts["merge_output_format"] = "mp4"
+
+    if Path(INSTAGRAM_COOKIES).exists():
+        opts["cookiefile"] = INSTAGRAM_COOKIES
 
     # ── Facebook ──────────────────────────────
     elif "facebook.com" in u or "fb.com" in u or "fb.watch" in u:
@@ -176,15 +185,16 @@ if "youtu" in u:
             opts["cookiefile"] = FACEBOOK_COOKIES
 
     # ── TikTok — suv belgisiz ─────────────────
-    elif "tiktok.com" in u:
-        opts["format"] = "best"
-        # Watermark'siz yuklab olish uchun
-        opts["extractor_args"] = {
-            "tiktok": {
-                "api_hostname": ["api16-normal-c-useast1a.tiktokv.com"],
-                "app_version": ["26.1.3"],
-            }
+elif "tiktok.com" in u:
+    opts["format"] = "bestvideo+bestaudio/best"
+    opts["merge_output_format"] = "mp4"
+
+    opts["extractor_args"] = {
+        "tiktok": {
+            "api_hostname": ["api16-normal-c-useast1a.tiktokv.com"],
+            "app_version": ["26.1.3"],
         }
+    }
 
     # ── Boshqa ────────────────────────────────
     else:
