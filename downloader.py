@@ -144,23 +144,20 @@ def _download_video_sync(url: str, uid: int) -> dict:
     u = url.lower()
 
     # ── YouTube ───────────────────────────────
-    if "youtu" in u:
-        opts["format"] = (
-            "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]"
-            "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
-            "/bestvideo+bestaudio"
-            "/best[ext=mp4]"
-            "/best"
-        )
-        # YouTube bot-blokidan o'tish
-        opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["web", "android"],
-            }
+    # ── YouTube ───────────────────────────────
+if "youtu" in u:
+    opts["format"] = "bestvideo+bestaudio/best"
+
+    # YouTube bot-blokidan o'tish
+    opts["extractor_args"] = {
+        "youtube": {
+            "player_client": ["web", "android"],
         }
-        # Cookies mavjud bo'lsa ishlatish
-        if Path("cookies_yt.txt").exists():
-            opts["cookiefile"] = "cookies_yt.txt"
+    }
+
+    # Cookies mavjud bo'lsa ishlatish
+    if Path("cookies_yt.txt").exists():
+        opts["cookiefile"] = "cookies_yt.txt"
 
     # ── Instagram ─────────────────────────────
     elif "instagram.com" in u:
