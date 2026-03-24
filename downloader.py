@@ -41,6 +41,7 @@ def _base_opts(uid: int, ext: str) -> dict:
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": ext,
+        "cookiefile": "cookies.txt",   # ← shu qatorni qo'shing
     }
 
 # ─── VIDEO ────────────────────────────────────
