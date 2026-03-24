@@ -7,9 +7,6 @@ from config import DOWNLOAD_DIR, AUDIO_QUALITY
 DOWNLOAD_PATH = Path(DOWNLOAD_DIR)
 DOWNLOAD_PATH.mkdir(exist_ok=True)
 
-# cookies.txt fayl joyi (bot.py bilan bir papkada)
-COOKIES_FILE = Path(__file__).parent / "cookies.txt"
-
 SUPPORTED = [
     "youtube.com", "youtu.be",
     "instagram.com",
@@ -45,48 +42,20 @@ def _base_opts(uid: int, ext: str) -> dict:
         "no_warnings": True,
         "merge_output_format": ext,
     }
-    # cookies.txt mavjud bo'lsa ulash (Instagram story uchun zarur)
-    if COOKIES_FILE.exists():
-        opts["cookiefile"] = str(COOKIES_FILE)
+    if Path("cookies.txt").exists():
+        opts["cookiefile"] = "cookies.txt"
     return opts
 
 # ─── VIDEO ────────────────────────────────────
 def _download_video_sync(url: str, uid: int) -> dict:
     opts = _base_opts(uid, "mp4")
-
-    u = url.lower()
-
-    # YouTube uchun kuchliroq format fallback zanjiri
-    if "youtu" in u:
-        opts["format"] = (
-            "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]"
-            "/bestvideo[height<=720]+bestaudio"
-            "/best[ext=mp4][height<=720]"
-            "/best[height<=720]"
-            "/best"
-        )
-
-    # Threads — cookie + oddiy format
-    elif "threads.net" in u:
-        opts["format"] = "best[ext=mp4]/best/bestvideo+bestaudio"
-        opts["http_headers"] = {
-            "User-Agent": (
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
-                "Mobile/15E148 Safari/604.1"
-            )
-        }
-
+    opts["format"] = (
+        "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]"
+        "/best[ext=mp4][height<=720]/best[height<=720]/best"
+    )
     # TikTok watermark-free
-    elif "tiktok" in u:
-        opts["format"] = "best[ext=mp4]/best"
-        opts["extractor_args"] = {
-            "tiktok": {"api_hostname": ["api22-normal-c-useast2a.tiktokv.com"]}
-        }
-
-    else:
-        # Instagram, Facebook uchun
-        opts["format"] = "best[ext=mp4]/best"
+    if "tiktok" in url.lower():
+        opts["extractor_args"] = {"tiktok": {"api_hostname": ["api22-normal-c-useast2a.tiktokv.com"]}}
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -94,12 +63,8 @@ def _download_video_sync(url: str, uid: int) -> dict:
         p = Path(fname)
         if not p.exists():
             p = p.with_suffix(".mp4")
-        return {
-            "path": str(p),
-            "title": info.get("title", "Video"),
-            "duration": info.get("duration", 0),
-            "thumb": info.get("thumbnail"),
-        }
+        return {"path": str(p), "title": info.get("title","Video"),
+                "duration": info.get("duration", 0), "thumb": info.get("thumbnail")}
 
 async def download_video(url: str, uid: int) -> dict:
     return await asyncio.get_event_loop().run_in_executor(
@@ -118,14 +83,10 @@ def _download_audio_sync(url: str, uid: int) -> dict:
         info = ydl.extract_info(url, download=True)
         fname = ydl.prepare_filename(info)
         p = Path(fname).with_suffix(".mp3")
-        return {
-            "path": str(p),
-            "title": info.get("title", "Audio"),
-            "duration": info.get("duration", 0),
-            "thumb": info.get("thumbnail"),
-            "artist": info.get("artist") or info.get("uploader", ""),
-            "album": info.get("album", ""),
-        }
+        return {"path": str(p), "title": info.get("title","Audio"),
+                "duration": info.get("duration", 0), "thumb": info.get("thumbnail"),
+                "artist": info.get("artist") or info.get("uploader",""),
+                "album": info.get("album","")}
 
 async def download_audio(url: str, uid: int) -> dict:
     return await asyncio.get_event_loop().run_in_executor(
@@ -147,13 +108,10 @@ def _search_song_sync(query: str, uid: int) -> dict:
             info = info["entries"][0]
         fname = ydl.prepare_filename(info)
         p = Path(fname).with_suffix(".mp3")
-        return {
-            "path": str(p),
-            "title": info.get("title", "Qo'shiq"),
-            "duration": info.get("duration", 0),
-            "artist": info.get("artist") or info.get("uploader", ""),
-            "thumb": info.get("thumbnail"),
-        }
+        return {"path": str(p), "title": info.get("title","Qo'shiq"),
+                "duration": info.get("duration", 0),
+                "artist": info.get("artist") or info.get("uploader",""),
+                "thumb": info.get("thumbnail")}
 
 async def search_song(query: str, uid: int) -> dict:
     return await asyncio.get_event_loop().run_in_executor(
@@ -162,6 +120,7 @@ async def search_song(query: str, uid: int) -> dict:
 # ─── LYRICS ───────────────────────────────────
 async def fetch_lyrics(query: str) -> str | None:
     import aiohttp, urllib.parse
+    # lyrics.ovh — bepul, API key shart emas
     parts = query.strip().split(None, 1)
     artist = parts[0] if parts else query
     title  = parts[1] if len(parts) > 1 else parts[0]
