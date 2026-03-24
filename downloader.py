@@ -35,14 +35,16 @@ def platform_name(url: str) -> str:
     return "Video"
 
 def _base_opts(uid: int, ext: str) -> dict:
-    return {
+    opts = {
         "outtmpl": str(DOWNLOAD_PATH / f"{uid}_%(id)s.%(ext)s"),
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": ext,
-        "cookiefile": "cookies.txt",   # ← shu qatorni qo'shing
     }
+    if Path("cookies.txt").exists():
+        opts["cookiefile"] = "cookies.txt"
+    return opts
 
 # ─── VIDEO ────────────────────────────────────
 def _download_video_sync(url: str, uid: int) -> dict:
