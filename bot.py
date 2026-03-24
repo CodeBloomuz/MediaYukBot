@@ -129,7 +129,10 @@ async def cb_check_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cb_format(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
 
     if not await is_subscribed(q.from_user.id, ctx):
         await q.edit_message_text("⛔ Obuna kerak!", reply_markup=sub_keyboard())
