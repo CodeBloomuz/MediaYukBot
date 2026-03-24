@@ -15,7 +15,7 @@ SUPPORTED = [
     "facebook.com", "fb.com", "fb.watch",
     "tiktok.com",
     "threads.net",
-    "x.com", "twitter.com",
+    "threads.com",
 ]
 
 def is_url(text: str) -> bool:
@@ -76,7 +76,7 @@ def _download_video_sync(url: str, uid: int) -> dict:
         }
 
     # Threads uchun
-    if "threads.net" in url.lower():
+    if "threads.net" in u or "threads.com" in u: return "Threads"
         opts["extractor_args"] = {"instagram": {"include_ads": False}}
 
     with yt_dlp.YoutubeDL(opts) as ydl:
