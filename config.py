@@ -5,12 +5,12 @@ from dotenv import load_dotenv
 # Railway da Variables bo'limidan o'qiydi
 load_dotenv()
 
-BOT_TOKEN    = os.environ["BOT_TOKEN"]
-CHANNEL_ID   = os.environ["CHANNEL_ID"]
-CHANNEL_LINK = os.environ["CHANNEL_LINK"]
-CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "Kanal")
+BOT_TOKEN    = "YOUR_BOT_TOKEN"
+CHANNEL_ID   = "@your_channel"
+CHANNEL_LINK = "https://t.me/your_channel"
+CHANNEL_NAME = "Kanal nomi"
+MAX_SIZE_MB  = 50
 
-DOWNLOAD_DIR  = "downloads"
-MAX_SIZE_MB   = 50
-AUDIO_QUALITY = "192"
-GENIUS_TOKEN  = os.environ.get("GENIUS_TOKEN", "")
+# Shazam Core API (RapidAPI)
+RAPIDAPI_KEY = "1f1917dd24msh234d5ff851d769ap1aa31cjsn09053fd11693"
+
