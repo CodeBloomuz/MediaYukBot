@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 from telegram import (
@@ -13,17 +14,21 @@ from telegram.constants import ChatAction
 from telegram.error import BadRequest, TelegramError
 import yt_dlp
 
-from config import BOT_TOKEN, CHANNEL_ID, CHANNEL_LINK, CHANNEL_NAME, MAX_SIZE_MB
+from config import BOT_TOKEN, CHANNEL_ID, CHANNEL_LINK, CHANNEL_NAME, MAX_SIZE_MB, RAPIDAPI_KEY
 from downloader import (
     is_url, extract_url, is_supported, platform_name,
     download_media, cleanup, cleanup_list, duration_str,
 )
+from shazam import recognize_song, format_result
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     level=logging.INFO,
 )
 log = logging.getLogger(__name__)
+
+AUDIO_DOWNLOAD_PATH = Path("audio_tmp")
+AUDIO_DOWNLOAD_PATH.mkdir(exist_ok=True)
 
 
 # ══════════════════════════════════════════════
@@ -74,23 +79,46 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not await is_subscribed(user.id, ctx):
         await update.message.reply_text(
-            f"🔥 Assalomu alaykum, <b>{user.first_name}</b>!\n\n"
-            f"👉 Botdan foydalanish uchun avval kanalimizga obuna bo'ling 👇",
+            f"👋 Salom, <b>{user.first_name}</b>!\n\n"
+            f"Botdan foydalanish uchun avval kanalimizga obuna bo'ling 👇",
             parse_mode="HTML",
             reply_markup=sub_keyboard(),
         )
         return
 
     await update.message.reply_text(
-        f"🔥 Assalomu alaykum, <b>{user.first_name}</b>. "
-        f"<b>{CHANNEL_NAME}</b>ga Xush kelibsiz!\n\n"
-        f"Bot orqali quyidagilarni yuklab olishingiz mumkin:\n\n"
-        f"• <b>Instagram</b> — post, rasm, Reels va Stories\n"
-        f"• <b>TikTok</b> — suv belgisiz video\n"
-        f"• <b>YouTube</b> — video (1080p gacha)\n"
-        f"• <b>Facebook</b> — video va Reels\n"
-        f"• <b>Threads</b> — video\n\n"
-        f"🚀 Media yuklashni boshlash uchun uning havolasini yuboring.",
+        f"🔥 Assalomu alaykum, <b>{user.first_name}</b>!\n"
+        f"<b>{CHANNEL_NAME}</b>ga xush kelibsiz!\n\n"
+        f"<b>Nima qila olaman:</b>\n\n"
+        f"▶️ <b>YouTube</b> — video (1080p gacha)\n"
+        f"📸 <b>Instagram</b> — post, rasm, Reels, Stories\n"
+        f"📘 <b>Facebook</b> — video, Reels, Stories\n\n"
+        f"🎵 <b>Qo'shiq topish</b> — ovozli xabar yoki audio yuboring\n\n"
+        f"🔗 Havola yuboring — bot yuklab beradi!\n"
+        f"🎤 Audio yuboring — bot qo'shiq nomini topib beradi!",
+        parse_mode="HTML",
+    )
+
+
+# ══════════════════════════════════════════════
+# /help
+# ══════════════════════════════════════════════
+
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await gate(update, ctx):
+        return
+    await update.message.reply_text(
+        "📖 <b>Qo'llanma</b>\n\n"
+        "▶️ <b>YouTube</b> — video (1080p gacha)\n"
+        "📸 <b>Instagram</b> — post, rasm, Reels, Stories\n"
+        "📘 <b>Facebook</b> — video, Reels, Stories\n\n"
+        "🎵 <b>Qo'shiq topish:</b>\n"
+        "  • Ovozli xabar yuboring\n"
+        "  • Yoki audio/mp3 fayl yuboring\n"
+        "  • Bot qo'shiq nomini topib beradi\n\n"
+        "⚠️ <b>Eslatmalar:</b>\n"
+        f"  • Xususiy (private) profil yuklanmaydi\n"
+        f"  • {MAX_SIZE_MB} MB dan katta fayl yuklanmaydi",
         parse_mode="HTML",
     )
 
@@ -122,6 +150,84 @@ async def cb_check_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════
+# 🎵 QOʻSHIQ TOPISH — ovozli xabar va audio
+# ══════════════════════════════════════════════
+
+async def handle_audio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await gate(update, ctx):
+        return
+
+    msg = update.message
+    audio_file = None
+
+    # Ovozli xabar (voice) yoki audio/mp3 faylni aniqlash
+    if msg.voice:
+        audio_file = msg.voice
+        file_ext = "ogg"
+    elif msg.audio:
+        audio_file = msg.audio
+        # Fayl nomidan kengaytma olish
+        fname = msg.audio.file_name or "audio.mp3"
+        file_ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else "mp3"
+    elif msg.document:
+        doc = msg.document
+        mime = doc.mime_type or ""
+        fname = doc.file_name or ""
+        if not (mime.startswith("audio/") or fname.lower().endswith((".mp3", ".ogg", ".wav", ".flac", ".m4a", ".aac"))):
+            return
+        audio_file = doc
+        file_ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else "mp3"
+    else:
+        return
+
+    status = await msg.reply_text("🎵 Qo'shiq aniqlanmoqda…")
+
+    # Faylni yuklab olish
+    uid = update.effective_user.id
+    local_path = AUDIO_DOWNLOAD_PATH / f"{uid}_shazam.{file_ext}"
+
+    try:
+        await ctx.bot.send_chat_action(msg.chat_id, ChatAction.TYPING)
+        tg_file = await ctx.bot.get_file(audio_file.file_id)
+        await tg_file.download_to_drive(str(local_path))
+
+        result = await recognize_song(str(local_path), RAPIDAPI_KEY)
+
+        if result and result.get("title"):
+            text = "🎧 <b>Qo'shiq topildi!</b>\n\n" + format_result(result)
+
+            # Cover rasm bor bo'lsa rasm bilan yuborish
+            if result.get("cover"):
+                try:
+                    await status.delete()
+                    await msg.reply_photo(
+                        photo=result["cover"],
+                        caption=text,
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    await safe_edit(status, text)
+            else:
+                await safe_edit(status, text)
+        else:
+            await safe_edit(
+                status,
+                "❌ Qo'shiq aniqlanmadi.\n\n"
+                "Ovoz sifatli bo'lishi va kamida 5 soniya bo'lishi kerak."
+            )
+
+    except Exception as e:
+        log.error(f"Shazam xato: {e}", exc_info=True)
+        await safe_edit(status, "❌ Qo'shiq aniqlanmadi. Qaytadan urinib ko'ring.")
+
+    finally:
+        try:
+            local_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════
 # URL HANDLER
 # ══════════════════════════════════════════════
 
@@ -136,7 +242,10 @@ async def handle_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_supported(url):
         await update.message.reply_text(
             "❌ Bu platforma qo'llab-quvvatlanmaydi.\n\n"
-            "✅ Ishlaydi: YouTube • Instagram • TikTok • Facebook • Threads"
+            "✅ Ishlaydi:\n"
+            "▶️ YouTube\n"
+            "📸 Instagram\n"
+            "📘 Facebook"
         )
         return
 
@@ -183,7 +292,6 @@ async def _process(msg, ctx, url: str, uid: int):
                 p = Path(item["path"])
                 if not p.exists():
                     continue
-
                 size_mb = p.stat().st_size / (1024 * 1024)
                 if size_mb > MAX_SIZE_MB:
                     log.warning(f"O'tkazib yuborildi: {size_mb:.1f} MB")
@@ -201,20 +309,15 @@ async def _process(msg, ctx, url: str, uid: int):
                     data = f.read()
 
                 if item["type"] == "video":
-                    media_group.append(
-                        InputMediaVideo(data, caption=caption, parse_mode="HTML")
-                    )
+                    media_group.append(InputMediaVideo(data, caption=caption, parse_mode="HTML"))
                 else:
-                    media_group.append(
-                        InputMediaPhoto(data, caption=caption, parse_mode="HTML")
-                    )
+                    media_group.append(InputMediaPhoto(data, caption=caption, parse_mode="HTML"))
                 sent_paths.append(str(p))
 
             if not media_group:
                 await safe_edit(msg, "❌ Yuborish uchun fayl topilmadi.")
                 return
 
-            # Telegram max 10 ta media group
             for i in range(0, len(media_group), 10):
                 await ctx.bot.send_media_group(chat_id, media_group[i:i+10])
 
@@ -225,7 +328,7 @@ async def _process(msg, ctx, url: str, uid: int):
             cleanup_list(sent_paths)
             return
 
-        # ── BITTA MEDIA (video yoki rasm) ─────
+        # ── BITTA MEDIA ───────────────────────
         mtype = info.get("type", "video")
         path  = Path(info["path"])
 
@@ -282,10 +385,7 @@ async def _process(msg, ctx, url: str, uid: int):
     except yt_dlp.utils.DownloadError as e:
         err = str(e).lower()
         if "private" in err or "login" in err or "authentication" in err or "cookies" in err:
-            text = (
-                "🔒 Bu xususiy (private) kontent yuklab bo'lmadi.\n\n"
-                "<i>Faqat ochiq profil va postlar ishlaydi.</i>"
-            )
+            text = "🔒 Bu xususiy (private) kontent yuklab bo'lmadi.\n<i>Faqat ochiq profil va postlar ishlaydi.</i>"
         elif "not available" in err or "unavailable" in err or "removed" in err:
             text = "❌ Kontent mavjud emas yoki o'chirilgan."
         elif "429" in err or "too many" in err:
@@ -295,10 +395,9 @@ async def _process(msg, ctx, url: str, uid: int):
         elif "sign in" in err or "age" in err:
             text = "🔞 Bu kontent faqat tizimga kirganlar uchun."
         elif "copyright" in err or "blocked" in err:
-            text = "🚫 Bu video mualliflik huquqi sababli bloklanган."
+            text = "🚫 Bu video mualliflik huquqi sababli bloklangan."
         else:
-            short = str(e)[:250]
-            text = f"❌ Yuklab bo'lmadi:\n<code>{short}</code>"
+            text = f"❌ Yuklab bo'lmadi:\n<code>{str(e)[:250]}</code>"
         await safe_edit(msg, text)
 
     except FileNotFoundError:
@@ -328,32 +427,13 @@ async def handle_other(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await gate(update, ctx):
         return
     await update.message.reply_text(
-        "🔗 Iltimos, havola yuboring.\n\n"
-        "<b>Misol:</b>\n"
+        "🔗 Havola yuboring yoki 🎵 audio yuboring.\n\n"
+        "<b>Havola misoli:</b>\n"
         "<code>https://www.instagram.com/p/...</code>\n"
-        "<code>https://www.tiktok.com/@user/video/...</code>\n"
-        "<code>https://youtu.be/...</code>",
-        parse_mode="HTML",
-    )
-
-
-# ══════════════════════════════════════════════
-# /help
-# ══════════════════════════════════════════════
-
-async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await gate(update, ctx):
-        return
-    await update.message.reply_text(
-        "📖 <b>Qo'llanma</b>\n\n"
-        "Havola yuboring — bot yuklab beradi.\n\n"
-        "▶️ <b>YouTube</b> — 1080p gacha video\n"
-        "🎬 <b>Instagram</b> — post (rasm/video), Reels, Stories\n"
-        "🎵 <b>TikTok</b> — suv belgisiz video\n"
-        "📘 <b>Facebook</b> — video, Reels\n"
-        "🧵 <b>Threads</b> — video\n\n"
-        "⚠️ Xususiy (private) profillar yuklanmaydi.\n"
-        "⚠️ Fayl 50 MB dan katta bo'lsa yuklanmaydi.",
+        "<code>https://www.facebook.com/watch/...</code>\n"
+        "<code>https://youtu.be/...</code>\n\n"
+        "<b>Qo'shiq topish uchun:</b>\n"
+        "Ovozli xabar yoki audio fayl yuboring 🎤",
         parse_mode="HTML",
     )
 
@@ -367,16 +447,30 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help",  cmd_help))
-
     app.add_handler(CallbackQueryHandler(cb_check_sub, pattern="^check_sub$"))
 
-    # URL kelsa — yukla
+    # Ovozli xabar
+    app.add_handler(MessageHandler(filters.VOICE, handle_audio))
+
+    # Audio fayl va audio document (mp3 va h.k.)
+    app.add_handler(MessageHandler(filters.AUDIO, handle_audio))
+    app.add_handler(MessageHandler(
+        filters.Document.MimeType("audio/mpeg") |
+        filters.Document.MimeType("audio/ogg") |
+        filters.Document.MimeType("audio/wav") |
+        filters.Document.MimeType("audio/flac") |
+        filters.Document.MimeType("audio/mp4") |
+        filters.Document.MimeType("audio/aac"),
+        handle_audio,
+    ))
+
+    # URL
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex(r'https?://'),
         handle_url,
     ))
 
-    # Boshqa matn — yo'naltir
+    # Boshqa matn
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_other,
