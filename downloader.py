@@ -63,6 +63,20 @@ def _find_downloaded(outtmpl_base: str, uid: int) -> Path | None:
 
 
 # ══════════════════════════════════════════════
+# INSTAGRAM FORMAT — rasm va video uchun
+# ══════════════════════════════════════════════
+
+def _instagram_format() -> str:
+    """
+    Instagram uchun universal format:
+    - Video bo'lsa mp4 oladi
+    - Rasm bo'lsa jpg/jpeg/png oladi
+    - "No video formats found" xatosini oldini oladi
+    """
+    return "best[ext=mp4]/best[ext=jpg]/best[ext=jpeg]/best[ext=png]/best[ext=webp]/best"
+
+
+# ══════════════════════════════════════════════
 # ASOSIY YUKLAB OLISH
 # ══════════════════════════════════════════════
 
@@ -121,7 +135,9 @@ def _download_sync(url: str, uid: int) -> dict:
 
     # ── Instagram ─────────────────────────────
     elif "instagram.com" in u:
-        base_opts["format"] = "best[ext=mp4]/best"
+        # FIX: rasm va video ikkalasini ham qo'llab-quvvatlash uchun
+        # "No video formats found" xatosini oldini olish
+        base_opts["format"] = _instagram_format()
         base_opts["http_headers"] = {
             "User-Agent": (
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 15_5 like Mac OS X) "
@@ -131,12 +147,37 @@ def _download_sync(url: str, uid: int) -> dict:
         }
         base_opts.update(_cookie("cookies.txt"))
 
+        # Carousel (bir nechta rasm/video) uchun
+        # img_index parametrini e'tiborsiz qoldirib barchasini yuklaymiz
+        if "img_index" in u:
+            # Faqat bitta media (belgilangan indeks) yuklaymiz
+            base_opts["noplaylist"] = True
+
     # ── Facebook ──────────────────────────────
     elif "facebook.com" in u or "fb." in u:
         base_opts["format"] = "best[ext=mp4]/best"
         base_opts.update(_cookie("cookies_fb.txt"))
         if not Path("cookies_fb.txt").exists():
             base_opts.update(_cookie("cookies.txt"))
+
+        # FIX: facebook.com/share/ havolalari uchun
+        # Bu redirect URL — yt-dlp o'zi kuzatib oladi,
+        # lekin ba'zan additional headers kerak
+        if "facebook.com/share" in u or "facebook.com/stories" in u:
+            base_opts["http_headers"] = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+            # Stories uchun playlist yoqiq qolsin
+            if "stories" in u:
+                base_opts["noplaylist"] = False
+            else:
+                base_opts["noplaylist"] = True
 
     # ── Threads ───────────────────────────────
     elif "threads" in u:
