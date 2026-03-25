@@ -2,3 +2,4 @@ python-telegram-bot==21.6
 yt-dlp>=2024.03.10
 aiohttp>=3.9.0
 python-dotenv>=1.0.0
+ShazamIO==6.1.2
