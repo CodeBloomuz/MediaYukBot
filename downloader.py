@@ -2,19 +2,16 @@ import asyncio
 import re
 from pathlib import Path
 import yt_dlp
-from config import DOWNLOAD_DIR
 
-DOWNLOAD_PATH = Path(DOWNLOAD_DIR)
+DOWNLOAD_PATH = Path("downloads")
 DOWNLOAD_PATH.mkdir(exist_ok=True)
-
-INSTAGRAM_COOKIES = "cookies.txt"
-FACEBOOK_COOKIES  = "cookies_fb.txt"
 
 SUPPORTED = [
     "youtube.com", "youtu.be",
     "instagram.com",
     "facebook.com", "fb.com", "fb.watch",
     "tiktok.com",
+    "threads.net", "threads.com",
 ]
 
 def is_url(text: str) -> bool:
@@ -29,236 +26,224 @@ def is_supported(url: str) -> bool:
 
 def platform_name(url: str) -> str:
     u = url.lower()
-    if "youtu" in u:                       return "YouTube"
-    if "instagram.com/stories" in u:       return "Instagram Story"
-    if "instagram.com/reels" in u:         return "Instagram Reels"
-    if "instagram.com/reel" in u:          return "Instagram Reels"
-    if "instagram.com" in u:              return "Instagram"
-    if "facebook.com/stories" in u:        return "Facebook Story"
-    if "facebook.com" in u or "fb." in u:  return "Facebook"
-    if "tiktok.com" in u:                 return "TikTok"
+    if "youtu" in u:                         return "YouTube"
+    if "instagram.com/stories" in u:         return "Instagram Story"
+    if "instagram.com/reels" in u:           return "Instagram Reels"
+    if "instagram.com/reel/" in u:           return "Instagram Reels"
+    if "instagram.com/p/" in u:              return "Instagram Post"
+    if "instagram.com" in u:                 return "Instagram"
+    if "facebook.com/stories" in u:          return "Facebook Story"
+    if "facebook.com/reel" in u:             return "Facebook Reels"
+    if "facebook.com" in u or "fb." in u:   return "Facebook"
+    if "tiktok.com" in u:                    return "TikTok"
+    if "threads" in u:                       return "Threads"
     return "Video"
 
-def is_instagram_photo_post(url: str) -> bool:
-    """Instagram /p/ — rasm yoki carousel post bo'lishi mumkin"""
-    return bool(re.search(r'instagram\.com/p/', url.lower()))
+def _cookie(filename: str) -> dict:
+    p = Path(filename)
+    return {"cookiefile": str(p)} if p.exists() else {}
 
-def _base_opts(uid: int) -> dict:
-    return {
+def _find_downloaded(outtmpl_base: str, uid: int) -> Path | None:
+    """Yuklab olingan faylni topadi."""
+    p = Path(outtmpl_base)
+    if p.exists():
+        return p
+    for ext in ["mp4", "mkv", "webm", "mov", "avi",
+                "jpg", "jpeg", "png", "webp"]:
+        alt = p.with_suffix(f".{ext}")
+        if alt.exists():
+            return alt
+    # Oxirgi yuklangan fayl
+    candidates = sorted(
+        DOWNLOAD_PATH.glob(f"{uid}_*"),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+# ══════════════════════════════════════════════
+# ASOSIY YUKLAB OLISH
+# ══════════════════════════════════════════════
+
+def _download_sync(url: str, uid: int) -> dict:
+    u = url.lower()
+
+    base_opts = {
         "outtmpl": str(DOWNLOAD_PATH / f"{uid}_%(id)s.%(ext)s"),
-        "noplaylist": True,
+        "noplaylist": False,        # Stories playlist uchun False
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": "mp4",
         "socket_timeout": 60,
+        "retries": 10,
+        "fragment_retries": 10,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+                "Chrome/122.0.0.0 Safari/537.36"
             )
         },
     }
 
-# ─── INSTAGRAM RASM YUKLAB OLISH ─────────────────────────────────────────────
-def _download_instagram_photos_sync(url: str, uid: int) -> dict:
-    """
-    Instagram post rasmlarini yuklab oladi.
-    Natija: {
-        "type": "photos",
-        "paths": ["1.jpg", "2.jpg", ...],
-        "title": "...",
-        "uploader": "..."
-    }
-    """
-    opts = {
-        **_base_opts(uid),
-        "outtmpl": str(DOWNLOAD_PATH / f"{uid}_%(id)s_%(autonumber)s.%(ext)s"),
-        "format": "best",
-        "writethumbnail": False,
-    }
-    if Path(INSTAGRAM_COOKIES).exists():
-        opts["cookiefile"] = INSTAGRAM_COOKIES
-
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-
-        # Carousel (bir nechta rasm/video)
-        if info and "entries" in info:
-            entries = list(info["entries"])
-        else:
-            entries = [info] if info else []
-
-        if not entries:
-            raise ValueError("Kontent topilmadi")
-
-        paths = []
-        media_types = []
-        for entry in entries:
-            if not entry:
-                continue
-            fname = ydl.prepare_filename(entry)
-            p = Path(fname)
-
-            # Agar fayl topilmasa turli kengaytmalarni sinab ko'rish
-            if not p.exists():
-                for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]:
-                    alt = p.with_suffix(ext)
-                    if alt.exists():
-                        p = alt
-                        break
-
-            if p.exists():
-                ext = p.suffix.lower()
-                if ext in [".mp4", ".webm", ".mkv", ".mov"]:
-                    media_types.append("video")
-                else:
-                    media_types.append("photo")
-                paths.append(str(p))
-
-        if not paths:
-            raise ValueError("Fayllar topilmadi")
-
-        # Agar hammasi video bo'lsa — oddiy video sifatida qaytarish
-        if all(t == "video" for t in media_types) and len(paths) == 1:
-            return {
-                "type": "video",
-                "path": paths[0],
-                "title": info.get("title", "Instagram Video"),
-                "duration": info.get("duration", 0),
-                "thumb": info.get("thumbnail"),
-                "uploader": info.get("uploader", ""),
-            }
-
-        return {
-            "type": "photos",
-            "paths": paths,
-            "media_types": media_types,
-            "title": info.get("title", "Instagram Post"),
-            "uploader": entries[0].get("uploader", info.get("uploader", "")),
-        }
-
-# ─── VIDEO YUKLAB OLISH ───────────────────────────────────────────────────────
-def _download_video_sync(url: str, uid: int) -> dict:
-    opts = _base_opts(uid)
-    u = url.lower()
-
     # ── YouTube ───────────────────────────────
     if "youtu" in u:
-        opts["format"] = (
+        base_opts["noplaylist"] = True
+        base_opts["format"] = (
             "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]"
-            "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
-            "/bestvideo+bestaudio"
-            "/best[ext=mp4]"
-            "/best"
+            "/bestvideo[ext=mp4]+bestaudio"
+            "/best[ext=mp4]/best"
         )
-        # YouTube bot-blokidan o'tish
-        opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["web", "android"],
-            }
+        base_opts["extractor_args"] = {
+            "youtube": {"player_client": ["web", "android"]}
         }
-        # Cookies mavjud bo'lsa ishlatish
-        if Path("cookies_yt.txt").exists():
-            opts["cookiefile"] = "cookies_yt.txt"
-
-    # ── Instagram ─────────────────────────────
-    elif "instagram.com" in u:
-        opts["format"] = (
-            "bestvideo[ext=mp4]+bestaudio"
-            "/best[ext=mp4]"
-            "/best"
-        )
-        if Path(INSTAGRAM_COOKIES).exists():
-            opts["cookiefile"] = INSTAGRAM_COOKIES
-
-    # ── Facebook ──────────────────────────────
-    elif "facebook.com" in u or "fb.com" in u or "fb.watch" in u:
-        opts["format"] = "best[ext=mp4]/best"
-        if Path(FACEBOOK_COOKIES).exists():
-            opts["cookiefile"] = FACEBOOK_COOKIES
+        base_opts.update(_cookie("cookies_yt.txt"))
 
     # ── TikTok — suv belgisiz ─────────────────
     elif "tiktok.com" in u:
-        opts["format"] = "best"
-        # Watermark'siz yuklab olish uchun
-        opts["extractor_args"] = {
+        base_opts["noplaylist"] = True
+        base_opts["format"] = "best[ext=mp4]/best"
+        base_opts["extractor_args"] = {
             "tiktok": {
                 "api_hostname": ["api16-normal-c-useast1a.tiktokv.com"],
                 "app_version": ["26.1.3"],
             }
         }
+        base_opts["http_headers"] = {
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+                "Mobile/15E148 Safari/604.1"
+            ),
+            "Referer": "https://www.tiktok.com/",
+        }
 
-    # ── Boshqa ────────────────────────────────
+    # ── Instagram ─────────────────────────────
+    elif "instagram.com" in u:
+        base_opts["format"] = "best[ext=mp4]/best"
+        base_opts["http_headers"] = {
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 15_5 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/19F77 "
+                "Instagram 239.2.0.17.109"
+            ),
+        }
+        base_opts.update(_cookie("cookies.txt"))
+
+    # ── Facebook ──────────────────────────────
+    elif "facebook.com" in u or "fb." in u:
+        base_opts["format"] = "best[ext=mp4]/best"
+        base_opts.update(_cookie("cookies_fb.txt"))
+        if not Path("cookies_fb.txt").exists():
+            base_opts.update(_cookie("cookies.txt"))
+
+    # ── Threads ───────────────────────────────
+    elif "threads" in u:
+        base_opts["noplaylist"] = True
+        base_opts["format"] = "best[ext=mp4]/best"
+        base_opts["http_headers"] = {
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+                "Mobile/15E148 Safari/604.1"
+            ),
+        }
+
     else:
-        opts["format"] = "best[ext=mp4]/best"
+        base_opts["noplaylist"] = True
+        base_opts["format"] = "best[ext=mp4]/best"
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    with yt_dlp.YoutubeDL(base_opts) as ydl:
         info = ydl.extract_info(url, download=True)
 
-        # Stories/playlist — birinchi videoni olish
-        if info and "entries" in info:
-            entries = list(info["entries"])
+        if not info:
+            raise ValueError("Kontent topilmadi")
+
+        # Playlist / Stories — bir nechta media
+        if "entries" in info:
+            entries = [e for e in info["entries"] if e]
             if not entries:
                 raise ValueError("Kontent topilmadi")
-            info = entries[0]
 
-        if not info:
-            raise ValueError("Video ma'lumotlari topilmadi")
+            # Bir nechta media qaytarish
+            results = []
+            for entry in entries:
+                fname = ydl.prepare_filename(entry)
+                p = _find_downloaded(fname, uid)
+                if p and p.exists():
+                    ext = p.suffix.lower()
+                    mtype = "video" if ext in [".mp4", ".mkv", ".webm", ".mov"] else "photo"
+                    results.append({
+                        "path": str(p),
+                        "type": mtype,
+                        "title": entry.get("title", ""),
+                        "duration": entry.get("duration", 0),
+                        "uploader": entry.get("uploader", ""),
+                    })
 
+            if len(results) == 1:
+                # Bitta natija — oddiy media sifatida
+                r = results[0]
+                return {
+                    "media_list": False,
+                    "type": r["type"],
+                    "path": r["path"],
+                    "title": r["title"],
+                    "duration": r["duration"],
+                    "uploader": r.get("uploader", ""),
+                }
+
+            return {
+                "media_list": True,
+                "items": results,
+                "title": info.get("title", ""),
+                "uploader": info.get("uploader", entries[0].get("uploader", "")),
+            }
+
+        # Bitta media
         fname = ydl.prepare_filename(info)
-        p = Path(fname)
+        p = _find_downloaded(fname, uid)
 
-        # Fayl topilmasa kengaytmalarni sinab ko'rish
-        if not p.exists():
-            for ext in [".mp4", ".webm", ".mkv", ".mov"]:
-                alt = p.with_suffix(ext)
-                if alt.exists():
-                    p = alt
-                    break
+        if not p or not p.exists():
+            raise FileNotFoundError("Fayl topilmadi")
 
-        if not p.exists():
-            # DOWNLOAD_PATH ichida uid bilan boshlangan faylni qidirish
-            candidates = list(DOWNLOAD_PATH.glob(f"{uid}_*.mp4"))
-            if candidates:
-                p = max(candidates, key=lambda f: f.stat().st_mtime)
+        ext = p.suffix.lower()
+        mtype = "video" if ext in [".mp4", ".mkv", ".webm", ".mov"] else "photo"
 
         return {
-            "type": "video",
+            "media_list": False,
+            "type": mtype,
             "path": str(p),
-            "title": info.get("title", "Video"),
+            "title": info.get("title", ""),
             "duration": info.get("duration", 0),
-            "thumb": info.get("thumbnail"),
             "uploader": info.get("uploader", ""),
         }
 
-async def download_media(url: str, uid: int) -> dict:
-    """
-    Asosiy yuklab olish funksiyasi.
-    Instagram /p/ postlari uchun rasm/carousel tekshiradi,
-    qolganlar uchun video yuklab oladi.
-    """
-    # Instagram oddiy post (/p/) — avval rasm ekanligini tekshirish
-    if is_instagram_photo_post(url):
-        return await asyncio.get_event_loop().run_in_executor(
-            None, _download_instagram_photos_sync, url, uid
-        )
 
+async def download_media(url: str, uid: int) -> dict:
     return await asyncio.get_event_loop().run_in_executor(
-        None, _download_video_sync, url, uid
+        None, _download_sync, url, uid
     )
 
-# Orqaga moslik uchun eski nom ham ishlaydi
-async def download_video(url: str, uid: int) -> dict:
-    return await download_media(url, uid)
 
-# ─── TOZALASH ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════
+# TOZALASH
+# ══════════════════════════════════════════════
+
 def cleanup(path: str):
     try:
         Path(path).unlink(missing_ok=True)
     except Exception:
         pass
 
-def cleanup_list(paths: list[str]):
+def cleanup_list(paths: list):
     for p in paths:
         cleanup(p)
+
+def duration_str(sec) -> str:
+    if not sec:
+        return ""
+    m, s = divmod(int(sec), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
