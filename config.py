@@ -1,16 +1,23 @@
 import os
 from dotenv import load_dotenv
 
-# Lokal ishlatganda .env fayldan o'qiydi
-# Railway da Variables bo'limidan o'qiydi
 load_dotenv()
 
-BOT_TOKEN    = "YOUR_BOT_TOKEN"
-CHANNEL_ID   = "@your_channel"
-CHANNEL_LINK = "https://t.me/your_channel"
-CHANNEL_NAME = "Kanal nomi"
-MAX_SIZE_MB  = 50
+BOT_TOKEN    = os.getenv("BOT_TOKEN",    "")
+CHANNEL_ID   = os.getenv("CHANNEL_ID",   "")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")
+CHANNEL_NAME = os.getenv("CHANNEL_NAME", "")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
 
-# Shazam Core API (RapidAPI)
-RAPIDAPI_KEY = "1f1917dd24msh234d5ff851d769ap1aa31cjsn09053fd11693"
+MAX_SIZE_MB  = int(os.getenv("MAX_SIZE_MB", "50"))
 
+# Ishga tushganda majburiy o'zgaruvchilarni tekshir
+_required = {
+    "BOT_TOKEN":    BOT_TOKEN,
+    "CHANNEL_ID":   CHANNEL_ID,
+    "CHANNEL_LINK": CHANNEL_LINK,
+    "RAPIDAPI_KEY": RAPIDAPI_KEY,
+}
+_missing = [k for k, v in _required.items() if not v]
+if _missing:
+    raise RuntimeError(f"❌ .env da quyidagilar yo'q: {', '.join(_missing)}")
