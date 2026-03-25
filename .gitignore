@@ -1,0 +1,8 @@
+.env
+cookies.txt
+cookies_yt.txt
+cookies_fb.txt
+downloads/
+audio_tmp/
+__pycache__/
+*.pyc
