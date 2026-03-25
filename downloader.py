@@ -1,5 +1,6 @@
 import asyncio
 import re
+import time
 from pathlib import Path
 import yt_dlp
 
@@ -26,17 +27,17 @@ def is_supported(url: str) -> bool:
 
 def platform_name(url: str) -> str:
     u = url.lower()
-    if "youtu" in u:                         return "YouTube"
-    if "instagram.com/stories" in u:         return "Instagram Story"
-    if "instagram.com/reels" in u:           return "Instagram Reels"
-    if "instagram.com/reel/" in u:           return "Instagram Reels"
-    if "instagram.com/p/" in u:              return "Instagram Post"
-    if "instagram.com" in u:                 return "Instagram"
-    if "facebook.com/stories" in u:          return "Facebook Story"
-    if "facebook.com/reel" in u:             return "Facebook Reels"
-    if "facebook.com" in u or "fb." in u:   return "Facebook"
-    if "tiktok.com" in u:                    return "TikTok"
-    if "threads" in u:                       return "Threads"
+    if "youtu" in u:                        return "YouTube"
+    if "instagram.com/stories" in u:        return "Instagram Story"
+    if "instagram.com/reels" in u:          return "Instagram Reels"
+    if "instagram.com/reel/" in u:          return "Instagram Reels"
+    if "instagram.com/p/" in u:             return "Instagram Post"
+    if "instagram.com" in u:                return "Instagram"
+    if "facebook.com/stories" in u:         return "Facebook Story"
+    if "facebook.com/reel" in u:            return "Facebook Reels"
+    if "facebook.com" in u or "fb." in u:  return "Facebook"
+    if "tiktok.com" in u:                   return "TikTok"
+    if "threads" in u:                      return "Threads"
     return "Video"
 
 def _cookie(filename: str) -> dict:
@@ -44,7 +45,7 @@ def _cookie(filename: str) -> dict:
     return {"cookiefile": str(p)} if p.exists() else {}
 
 def _find_downloaded(outtmpl_base: str, uid: int) -> Path | None:
-    """Yuklab olingan faylni topadi."""
+    """Yuklab olingan faylni topadi — barcha kengaytmalarni tekshiradi."""
     p = Path(outtmpl_base)
     if p.exists():
         return p
@@ -53,7 +54,7 @@ def _find_downloaded(outtmpl_base: str, uid: int) -> Path | None:
         alt = p.with_suffix(f".{ext}")
         if alt.exists():
             return alt
-    # Oxirgi yuklangan fayl
+    # Eng so'nggi yuklangan fayl (zaxira)
     candidates = sorted(
         DOWNLOAD_PATH.glob(f"{uid}_*"),
         key=lambda f: f.stat().st_mtime,
@@ -62,18 +63,19 @@ def _find_downloaded(outtmpl_base: str, uid: int) -> Path | None:
     return candidates[0] if candidates else None
 
 
-# ══════════════════════════════════════════════
-# INSTAGRAM FORMAT — rasm va video uchun
-# ══════════════════════════════════════════════
+def _snapshot_files() -> set:
+    """downloads/ papkasidagi barcha fayllarni qaytaradi."""
+    return set(DOWNLOAD_PATH.glob("*"))
 
-def _instagram_format() -> str:
-    """
-    Instagram uchun universal format:
-    - Video bo'lsa mp4 oladi
-    - Rasm bo'lsa jpg/jpeg/png oladi
-    - "No video formats found" xatosini oldini oladi
-    """
-    return "best[ext=mp4]/best[ext=jpg]/best[ext=jpeg]/best[ext=png]/best[ext=webp]/best"
+
+def _new_files(before: set) -> list:
+    """before dan keyin paydo bolgan fayllarni qaytaradi."""
+    after = set(DOWNLOAD_PATH.glob("*"))
+    return sorted(after - before, key=lambda f: f.stat().st_mtime)
+
+
+def _media_type(path: Path) -> str:
+    return "video" if path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov", ".avi"} else "photo"
 
 
 # ══════════════════════════════════════════════
@@ -83,9 +85,15 @@ def _instagram_format() -> str:
 def _download_sync(url: str, uid: int) -> dict:
     u = url.lower()
 
+    # Instagram uchun universal format — rasm VA video
+    INSTAGRAM_FORMAT = (
+        "best[ext=mp4]/best[ext=jpg]/best[ext=jpeg]"
+        "/best[ext=png]/best[ext=webp]/best"
+    )
+
     base_opts = {
         "outtmpl": str(DOWNLOAD_PATH / f"{uid}_%(id)s.%(ext)s"),
-        "noplaylist": False,        # Stories playlist uchun False
+        "noplaylist": False,
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": "mp4",
@@ -114,7 +122,7 @@ def _download_sync(url: str, uid: int) -> dict:
         }
         base_opts.update(_cookie("cookies_yt.txt"))
 
-    # ── TikTok — suv belgisiz ─────────────────
+    # ── TikTok ────────────────────────────────
     elif "tiktok.com" in u:
         base_opts["noplaylist"] = True
         base_opts["format"] = "best[ext=mp4]/best"
@@ -135,9 +143,9 @@ def _download_sync(url: str, uid: int) -> dict:
 
     # ── Instagram ─────────────────────────────
     elif "instagram.com" in u:
-        # FIX: rasm va video ikkalasini ham qo'llab-quvvatlash uchun
-        # "No video formats found" xatosini oldini olish
-        base_opts["format"] = _instagram_format()
+        # FIX: "No video formats found" xatosini hal qiladi
+        # Rasm bo'lsa jpg/png, video bo'lsa mp4 oladi
+        base_opts["format"] = INSTAGRAM_FORMAT
         base_opts["http_headers"] = {
             "User-Agent": (
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 15_5 like Mac OS X) "
@@ -147,37 +155,29 @@ def _download_sync(url: str, uid: int) -> dict:
         }
         base_opts.update(_cookie("cookies.txt"))
 
-        # Carousel (bir nechta rasm/video) uchun
-        # img_index parametrini e'tiborsiz qoldirib barchasini yuklaymiz
-        if "img_index" in u:
-            # Faqat bitta media (belgilangan indeks) yuklaymiz
-            base_opts["noplaylist"] = True
-
     # ── Facebook ──────────────────────────────
     elif "facebook.com" in u or "fb." in u:
+        # FIX: Stories va share/ havolalari uchun to'liq headers
         base_opts["format"] = "best[ext=mp4]/best"
+        base_opts["http_headers"] = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        # Cookies MAJBURIY — Stories va share havolalari ishlamaydi
         base_opts.update(_cookie("cookies_fb.txt"))
         if not Path("cookies_fb.txt").exists():
             base_opts.update(_cookie("cookies.txt"))
 
-        # FIX: facebook.com/share/ havolalari uchun
-        # Bu redirect URL — yt-dlp o'zi kuzatib oladi,
-        # lekin ba'zan additional headers kerak
-        if "facebook.com/share" in u or "facebook.com/stories" in u:
-            base_opts["http_headers"] = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/122.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            }
-            # Stories uchun playlist yoqiq qolsin
-            if "stories" in u:
-                base_opts["noplaylist"] = False
-            else:
-                base_opts["noplaylist"] = True
+        # Stories — playlist sifatida yuklanadi
+        if "stories" in u:
+            base_opts["noplaylist"] = False
+        else:
+            base_opts["noplaylist"] = True
 
     # ── Threads ───────────────────────────────
     elif "threads" in u:
@@ -195,36 +195,57 @@ def _download_sync(url: str, uid: int) -> dict:
         base_opts["noplaylist"] = True
         base_opts["format"] = "best[ext=mp4]/best"
 
+    # Yuklanishdan OLDIN papkadagi fayllarni eslab qolish
+    before = _snapshot_files()
+
     with yt_dlp.YoutubeDL(base_opts) as ydl:
         info = ydl.extract_info(url, download=True)
 
         if not info:
             raise ValueError("Kontent topilmadi")
 
-        # Playlist / Stories — bir nechta media
+        # ── Playlist / Stories / Carousel ─────
         if "entries" in info:
             entries = [e for e in info["entries"] if e]
             if not entries:
                 raise ValueError("Kontent topilmadi")
 
-            # Bir nechta media qaytarish
             results = []
             for entry in entries:
+                # 1-usul: prepare_filename
                 fname = ydl.prepare_filename(entry)
                 p = _find_downloaded(fname, uid)
+
+                # 2-usul: yangi fayllar orqali
+                if not p or not p.exists():
+                    new_files = _new_files(before)
+                    idx = len(results)
+                    p = new_files[idx] if idx < len(new_files) else None
+
                 if p and p.exists():
-                    ext = p.suffix.lower()
-                    mtype = "video" if ext in [".mp4", ".mkv", ".webm", ".mov"] else "photo"
                     results.append({
                         "path": str(p),
-                        "type": mtype,
+                        "type": _media_type(p),
                         "title": entry.get("title", ""),
                         "duration": entry.get("duration", 0),
                         "uploader": entry.get("uploader", ""),
                     })
 
+            # 3-usul: hech narsa topilmasa — barcha yangi fayllar
+            if not results:
+                for p in _new_files(before):
+                    results.append({
+                        "path": str(p),
+                        "type": _media_type(p),
+                        "title": info.get("title", ""),
+                        "duration": 0,
+                        "uploader": info.get("uploader", ""),
+                    })
+
+            if not results:
+                raise ValueError("Kontent topilmadi")
+
             if len(results) == 1:
-                # Bitta natija — oddiy media sifatida
                 r = results[0]
                 return {
                     "media_list": False,
@@ -242,19 +263,21 @@ def _download_sync(url: str, uid: int) -> dict:
                 "uploader": info.get("uploader", entries[0].get("uploader", "")),
             }
 
-        # Bitta media
+        # ── Bitta media ───────────────────────
         fname = ydl.prepare_filename(info)
         p = _find_downloaded(fname, uid)
+
+        # Zaxira: yuklanishdan keyin paydo bolgan yangi fayl
+        if not p or not p.exists():
+            new_files = _new_files(before)
+            p = new_files[0] if new_files else None
 
         if not p or not p.exists():
             raise FileNotFoundError("Fayl topilmadi")
 
-        ext = p.suffix.lower()
-        mtype = "video" if ext in [".mp4", ".mkv", ".webm", ".mov"] else "photo"
-
         return {
             "media_list": False,
-            "type": mtype,
+            "type": _media_type(p),
             "path": str(p),
             "title": info.get("title", ""),
             "duration": info.get("duration", 0),
@@ -263,9 +286,8 @@ def _download_sync(url: str, uid: int) -> dict:
 
 
 async def download_media(url: str, uid: int) -> dict:
-    return await asyncio.get_event_loop().run_in_executor(
-        None, _download_sync, url, uid
-    )
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _download_sync, url, uid)
 
 
 # ══════════════════════════════════════════════
