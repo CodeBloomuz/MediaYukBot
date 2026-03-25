@@ -4,7 +4,7 @@
 .instagram.com	TRUE	/	TRUE	1808969671	csrftoken	bvstrIlsAUo0UYAW_mDwzl
 .instagram.com	TRUE	/	TRUE	1804044017	datr	8C54aScePX7feufuKqOQpVx-
 .instagram.com	TRUE	/	TRUE	1801020017	ig_did	1596A876-5547-4A0A-996C-70CAF8FC4CF2
-.instagram.com	TRUE	/	TRUE	1808913433	mid	acJ8GAALAAHQHYYaLDN8MiJfcbnG
+.instagram.com	TRUE	/	TRUE	1808913434	mid	acJ8GAALAAHQHYYaLDN8MiJfcbnG
 .instagram.com	TRUE	/	TRUE	1808913434	ps_l	1
 .instagram.com	TRUE	/	TRUE	1808913434	ps_n	1
 .instagram.com	TRUE	/	TRUE	1775014464	wd	1920x911
